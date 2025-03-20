@@ -1,70 +1,110 @@
 import os
-import PyPDF2  
-import pptx  
-import openpyxl   
-import subprocess   
-import textract  
-import pytesseract   
-from PIL import Image  
-import fitz  
+import PyPDF2
+import pptx
+import openpyxl
+import subprocess
 import tempfile
 import cv2
 import numpy as np
-from pdf2image import convert_from_path   
+from pdf2image import convert_from_path
+from PIL import Image
+import fitz  # PyMuPDF
 from paddleocr import PaddleOCR
 
-pytesseract.pytesseract.tesseract_cmd = os.getenv("TESSERACT_PATH")
-INPUT_DIR = "/Users/jm/Desktop/test"
-OUTPUT_DIR ="/Users/jm/Desktop/result"
+# 경로 설정
+INPUT_DIR = "../test"
+OUTPUT_DIR = "../result"
+
+# PaddleOCR 초기화 (한국어+영어 지원)
+ocr = PaddleOCR(use_angle_cls=True, lang='korean', use_gpu=False)
 
 """
-1. OCR 실행 함수 (전처리 및 paddleOCR사용)
+1. OCR 실행 함수 (PaddleOCR 사용)
 """
-def deskew_image(image):
-    """이미지 기울기 보정"""
+def perform_ocr_with_paddle(image):
+    """PaddleOCR을 사용하여 이미지에서 텍스트 추출"""
+    # PIL 이미지를 numpy 배열로 변환
+    if isinstance(image, Image.Image):
+        img_array = np.array(image)
+    else:
+        img_array = image
+    
+    # BGR -> RGB 변환 (OpenCV와 PIL 이미지 형식 차이 처리)
+    if len(img_array.shape) == 3 and img_array.shape[2] == 3:
+        if isinstance(image, np.ndarray):  # OpenCV 이미지인 경우
+            img_array = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
+    
+    # PaddleOCR 실행
+    result = ocr.ocr(img_array, cls=True)
+    
+    # 결과 텍스트 추출
+    text = ""
+    if result:
+        for idx, line in enumerate(result):
+            if line:
+                for word_info in line:
+                    if len(word_info) >= 2 and isinstance(word_info[1], tuple):
+                        text += word_info[1][0] + " "
+                text += "\n"
+    
+    return text
+
+def preprocess_image_for_ocr(image):
+    """OCR 정확도를 높이기 위해 이미지 전처리"""
+    # PIL 이미지를 OpenCV 이미지로 변환
+    if isinstance(image, Image.Image):
+        image = np.array(image)
+        # 이미지가 RGBA인 경우 RGB로 변환
+        if len(image.shape) == 3 and image.shape[2] == 4:
+            image = cv2.cvtColor(image, cv2.COLOR_RGBA2RGB)
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    
+    # 그레이스케일 변환
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 50, 150, apertureSize=3)
-    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 100, minLineLength=100, maxLineGap=10)
     
-    angle = 0
-    if lines is not None:
-        angles = [np.arctan2(y2 - y1, x2 - x1) for x1, y1, x2, y2 in lines[:, 0]]
-        angle = np.median(angles) * (180 / np.pi)
+    # 노이즈 제거 (가우시안 블러)
+    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+    
+    # 적응형 임계값 처리
+    thresh = cv2.adaptiveThreshold(
+        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+        cv2.THRESH_BINARY, 11, 2
+    )
+    
+    # 대비 향상
+    enhanced = cv2.equalizeHist(gray)
+    
+    # 결과 이미지들을 반환 (여러 전처리 방식)
+    return [
+        image,  # 원본
+        cv2.cvtColor(thresh, cv2.COLOR_GRAY2RGB),  # 이진화
+        cv2.cvtColor(enhanced, cv2.COLOR_GRAY2RGB)  # 대비 향상
+    ]
 
-    if abs(angle) > 1:
-        (h, w) = image.shape[:2]
-        center = (w // 2, h // 2)
-        M = cv2.getRotationMatrix2D(center, angle, 1.0)
-        image = cv2.warpAffine(image, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+def try_multiple_ocr_approaches(image):
+    """여러 OCR 접근 방식을 시도하여 최상의 결과 반환"""
+    results = []
+    scores = []
     
-    return image
-
-def enhance_contrast(image):
-    """CLAHE 적용"""
-    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
+    # 여러 전처리 이미지 생성
+    processed_images = preprocess_image_for_ocr(image)
     
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    cl = clahe.apply(l)
+    for img in processed_images:
+        try:
+            text = perform_ocr_with_paddle(img)
+            results.append(text)
+            
+            # 간단한 텍스트 품질 점수 계산 (단어 수와 평균 단어 길이)
+            words = text.split()
+            score = len(words) * sum(len(w) for w in words) / max(1, len(words))
+            scores.append(score)
+        except:
+            results.append("")
+            scores.append(0)
     
-    limg = cv2.merge((cl, a, b))
-    enhanced = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
-    return enhanced
-
-def preprocess_image_for_ocr(image_path):
-    """전처리 - 기울기 보정, 대비 향상"""
-    image = cv2.imread(image_path)
-    image = deskew_image(image)  
-    image = enhance_contrast(image)   
-    return image
-
-def perform_ocr(image_path):
-    image = preprocess_image_for_ocr(image_path)
-    ocr = PaddleOCR(lang='korean')
-    results = ocr.ocr(image, cls=True)
-    
-    extracted_text = "\n".join([res[1][0] for line in results for res in line if res[1][1] > 0.5])
-    return extracted_text
+    # 최상의 결과 선택
+    best_index = scores.index(max(scores)) if scores else 0
+    return results[best_index]
 
 """
 2. 각 파일 포맷에서 텍스트 추출하는 함수들
@@ -86,8 +126,8 @@ def convert_image_to_txt(file_path):
         except:
             pass
         
-        # 여러 OCR 접근 방식 시도
-        text = perform_ocr(image)
+        # PaddleOCR로 텍스트 추출
+        text = try_multiple_ocr_approaches(image)
         
         if not text.strip():
             return "[이미지에서 텍스트를 추출할 수 없습니다]"
@@ -131,8 +171,8 @@ def convert_pdf_to_txt(file_path):
                 for i, img in enumerate(images):
                     print(f"  페이지 {i+1}/{len(images)} OCR 처리 중...")
                     
-                    # 여러 OCR 접근 방식 시도하여 최상의 결과 얻기
-                    page_text = perform_ocr(img)
+                    # PaddleOCR로 텍스트 추출
+                    page_text = try_multiple_ocr_approaches(img)
                     
                     ocr_text += f"--- 페이지 {i + 1} ---\n{page_text}\n\n"
                 
@@ -155,7 +195,7 @@ def convert_pdf_to_txt(file_path):
                     img = Image.frombytes("RGB", [pix.width, pix.height], img_data)
                     
                     # OCR 시도
-                    page_text = perform_ocr(img)
+                    page_text = try_multiple_ocr_approaches(img)
                     ocr_text += f"--- 페이지 {page_number + 1} ---\n{page_text}\n\n"
             
             if ocr_text.strip():
@@ -172,26 +212,39 @@ def convert_pdf_to_txt(file_path):
     return text
 
 def convert_doc_to_txt(file_path):
+    """DOC/DOCX 파일에서 텍스트 추출"""
     try:
-        text = textract.process(file_path).decode('utf-8')
-        return text
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext == '.docx':
+            # python-docx 사용
+            from docx import Document
+            try:
+                doc = Document(file_path)
+                text = "\n".join([para.text for para in doc.paragraphs])
+                return text
+            except Exception as e:
+                return f"[⚠️ DOCX 추출 중 에러: {e}]"
+        elif ext == '.doc':
+            # antiword 사용
+            try:
+                result = subprocess.run(['antiword', file_path], capture_output=True, text=True, check=True)
+                return result.stdout
+            except:
+                # catdoc 대체 시도
+                try:
+                    result = subprocess.run(['catdoc', file_path], capture_output=True, text=True, check=True)
+                    return result.stdout
+                except Exception as e:
+                    return f"[⚠️ DOC 추출 중 에러: {e}]"
+        else:
+            return f"[⚠️ 지원되지 않는 형식: {ext}]"
     except Exception as e:
-        # textract 실패 시 textutil 명령어 사용 시도
-        try:
-            tmp_output = tempfile.mktemp(suffix=".txt")
-            cmd = ['textutil', '-convert', 'txt', '-output', tmp_output, file_path]
-            subprocess.run(cmd, check=True)
-            
-            with open(tmp_output, 'r', encoding='utf-8') as f:
-                text = f.read()
-            
-            # 임시 파일 삭제
-            os.remove(tmp_output)
-            return text
-        except Exception as inner_e:
-            return f"[⚠️ DOC 추출 중 에러: {e}, 대체 방법 에러: {inner_e}]"
+        return f"[⚠️ DOC 추출 중 에러: {e}]"
+
+
 
 def convert_pptx_to_txt(file_path):
+    """PPT/PPTX 파일에서 텍스트 추출"""
     text = ""
     try:
         prs = pptx.Presentation(file_path)
@@ -200,14 +253,20 @@ def convert_pptx_to_txt(file_path):
                 if hasattr(shape, "text"):
                     text += shape.text + "\n"
     except Exception as e:
-        # textract로 대체 시도
+        # 리눅스에서는 대체 방법 시도
         try:
-            text = textract.process(file_path).decode('utf-8')
+            # pptx2txt 또는 다른 커맨드라인 도구 사용
+            result = subprocess.run(['pptx2txt', file_path], capture_output=True, text=True, check=False)
+            if result.returncode == 0:
+                text = result.stdout
+            else:
+                text = f"[⚠️ PPT 추출 중 에러: {e}, 대체 방법 실패]"
         except:
             text = f"[⚠️ PPT 추출 중 에러: {e}]"
     return text
 
 def convert_xlsx_to_txt(file_path):
+    """XLSX/XLS 파일에서 텍스트 추출"""
     text = ""
     try:
         wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
@@ -218,7 +277,23 @@ def convert_xlsx_to_txt(file_path):
                 text += row_data + "\n"
             text += "\n"
     except Exception as e:
-        text = f"[⚠️ XLSX 추출 중 에러: {e}]"
+        # 리눅스에서는 대체 방법 시도
+        try:
+            # xlsx2csv 사용
+            tmp_output = tempfile.mktemp(suffix=".csv")
+            cmd = ['xlsx2csv', file_path, tmp_output]
+            subprocess.run(cmd, check=True)
+            
+            with open(tmp_output, 'r', encoding='utf-8', errors='replace') as f:
+                text = f.read()
+            
+            # 임시 파일 삭제
+            os.remove(tmp_output)
+            
+            if not text.strip():
+                text = f"[⚠️ XLSX 추출 중 에러: {e}, 대체 방법 결과 없음]"
+        except:
+            text = f"[⚠️ XLSX 추출 중 에러: {e}]"
     return text
 
 """
@@ -239,8 +314,15 @@ def convert_file_to_txt(file_path):
         return convert_xlsx_to_txt(file_path)
     else:
         try:
-            text = textract.process(file_path).decode('utf-8')
-            return text
+            # 리눅스에서는 file 명령어로 파일 타입 확인 후 적절한 처리
+            result = subprocess.run(['file', '-b', file_path], capture_output=True, text=True, check=True)
+            file_type = result.stdout.lower()
+            
+            if 'text' in file_type:
+                with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                    return f.read()
+            else:
+                return f"⚠️ 지원되지 않는 파일 형식입니다: {ext} (파일 타입: {file_type.strip()})"
         except:
             return f"⚠️ 지원되지 않는 파일 형식입니다: {ext}"
 
@@ -248,6 +330,8 @@ def convert_file_to_txt(file_path):
 4. main()
 """
 def main(input_dir, output_dir):
+    os.makedirs(output_dir, exist_ok=True)
+    
     for root, dirs, files in os.walk(input_dir):
         for file in files:
             file_path = os.path.join(root, file)
@@ -267,8 +351,12 @@ def main(input_dir, output_dir):
             header = f"File: {file}\nPath: {relative_path}\n{'='*40}\n"
             full_text = header + txt_content
             
-            out_folder = os.path.join(output_dir, relative_path)
+            # 출력 폴더 경로 생성
+            relative_dir = os.path.dirname(relative_path)
+            out_folder = os.path.join(output_dir, relative_dir)
             os.makedirs(out_folder, exist_ok=True)
+            
+            # 출력 파일 경로 생성
             out_file_name = os.path.splitext(file)[0] + ".txt"
             out_file_path = os.path.join(out_folder, out_file_name)
             
@@ -283,5 +371,8 @@ def main(input_dir, output_dir):
 if __name__ == "__main__":
     input_dir = INPUT_DIR
     output_dir = OUTPUT_DIR
+    
+    # PaddleOCR 모델이 처음 실행 시 자동으로 다운로드됨
+    print("PaddleOCR 초기화 중...")
     
     main(input_dir, output_dir)
