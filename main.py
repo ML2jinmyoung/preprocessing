@@ -11,115 +11,60 @@ import tempfile
 import cv2
 import numpy as np
 from pdf2image import convert_from_path   
+from paddleocr import PaddleOCR
 
 pytesseract.pytesseract.tesseract_cmd = os.getenv("TESSERACT_PATH")
-INPUT_DIR = "/Users/jm/Desktop/test_copy"
-OUTPUT_DIR ="/Users/jm/Desktop/test_text"
+INPUT_DIR = "/Users/jm/Desktop/test"
+OUTPUT_DIR ="/Users/jm/Desktop/result"
 
 """
-1. OCR 실행 함수 (전처리 > 다양한 방식 시도)
+1. OCR 실행 함수 (전처리 및 paddleOCR사용)
 """
-def preprocess_image_for_ocr(image, lang='kor'):
-    """OCR 정확도를 높이기 위해 이미지 전처리"""
-    # PIL 이미지를 OpenCV 이미지로 변환
-    if isinstance(image, Image.Image):
-        image = np.array(image)
-        # 이미지가 RGBA인 경우 RGB로 변환
-        if image.shape[2] == 4:
-            image = cv2.cvtColor(image, cv2.COLOR_RGBA2RGB)
-        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-    
-    # 원본 이미지 복사
-    original = image.copy()
-    
-    # 그레이스케일 변환
+def deskew_image(image):
+    """이미지 기울기 보정"""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 100, minLineLength=100, maxLineGap=10)
     
-    # 한국어 텍스트에 최적화된 처리
-    if lang == 'kor':
-        # 노이즈 제거 (가우시안 블러)
-        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
-        
-        # 적응형 임계값 처리
-        thresh = cv2.adaptiveThreshold(
-            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-            cv2.THRESH_BINARY, 11, 2
-        )
-        
-        # 모폴로지 연산 (노이즈 제거 및 텍스트 선명화)
-        kernel = np.ones((1, 1), np.uint8)
-        opening = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
-        
-        # 대비 조정
-        processed = opening
-    else:
-        # 영어 및 기타 언어에 대한 기본 처리
-        # 이진화 (OTSU 방식)
-        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        processed = thresh
-    
-    # 결과 이미지를 PIL 형식으로 변환
-    return Image.fromarray(processed)
+    angle = 0
+    if lines is not None:
+        angles = [np.arctan2(y2 - y1, x2 - x1) for x1, y1, x2, y2 in lines[:, 0]]
+        angle = np.median(angles) * (180 / np.pi)
 
-def try_multiple_ocr_approaches(image, lang='kor+eng'):
-    """여러 OCR 접근 방식을 시도하여 최상의 결과 반환"""
-    results = []
-    scores = []
+    if abs(angle) > 1:
+        (h, w) = image.shape[:2]
+        center = (w // 2, h // 2)
+        M = cv2.getRotationMatrix2D(center, angle, 1.0)
+        image = cv2.warpAffine(image, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
     
-    # 원본 이미지 사용
-    original_img = image
-    custom_config1 = f'--oem 1 --psm 6 -l {lang} --dpi 300'
+    return image
+
+def enhance_contrast(image):
+    """CLAHE 적용"""
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
     
-    # 첫 번째 시도 - 원본 이미지
-    try:
-        text1 = pytesseract.image_to_string(original_img, config=custom_config1)
-        results.append(text1)
-        # 간단한 텍스트 품질 점수 계산 (단어 수, 평균 단어 길이 등)
-        words = text1.split()
-        score1 = len(words) * sum(len(w) for w in words) / max(1, len(words))
-        scores.append(score1)
-    except:
-        results.append("")
-        scores.append(0)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    cl = clahe.apply(l)
     
-    # 두 번째 시도 - 전처리된 이미지
-    try:
-        processed_img = preprocess_image_for_ocr(original_img, 'kor')
-        custom_config2 = f'--oem 1 --psm 3 -l {lang} --dpi 300'
-        text2 = pytesseract.image_to_string(processed_img, config=custom_config2)
-        results.append(text2)
-        
-        words = text2.split()
-        score2 = len(words) * sum(len(w) for w in words) / max(1, len(words))
-        scores.append(score2)
-    except:
-        results.append("")
-        scores.append(0)
+    limg = cv2.merge((cl, a, b))
+    enhanced = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
+    return enhanced
+
+def preprocess_image_for_ocr(image_path):
+    """전처리 - 기울기 보정, 대비 향상"""
+    image = cv2.imread(image_path)
+    image = deskew_image(image)  
+    image = enhance_contrast(image)   
+    return image
+
+def perform_ocr(image_path):
+    image = preprocess_image_for_ocr(image_path)
+    ocr = PaddleOCR(lang='korean')
+    results = ocr.ocr(image, cls=True)
     
-    # 세 번째 시도 - 대비 향상
-    try:
-        img_array = np.array(original_img)
-        if len(img_array.shape) == 3:  # 컬러 이미지
-            img_array = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-        
-        # 히스토그램 평활화 적용
-        enhanced = cv2.equalizeHist(img_array)
-        enhanced_img = Image.fromarray(enhanced)
-        
-        custom_config3 = f'--oem 1 --psm 1 -l {lang} --dpi 300'
-        text3 = pytesseract.image_to_string(enhanced_img, config=custom_config3)
-        results.append(text3)
-        
-        words = text3.split()
-        score3 = len(words) * sum(len(w) for w in words) / max(1, len(words))
-        scores.append(score3)
-    except:
-        results.append("")
-        scores.append(0)
-    
-    # 최상의 결과 선택
-    best_index = scores.index(max(scores)) if scores else 0
-    return results[best_index]
+    extracted_text = "\n".join([res[1][0] for line in results for res in line if res[1][1] > 0.5])
+    return extracted_text
 
 """
 2. 각 파일 포맷에서 텍스트 추출하는 함수들
@@ -142,7 +87,7 @@ def convert_image_to_txt(file_path):
             pass
         
         # 여러 OCR 접근 방식 시도
-        text = try_multiple_ocr_approaches(image)
+        text = perform_ocr(image)
         
         if not text.strip():
             return "[이미지에서 텍스트를 추출할 수 없습니다]"
@@ -187,7 +132,7 @@ def convert_pdf_to_txt(file_path):
                     print(f"  페이지 {i+1}/{len(images)} OCR 처리 중...")
                     
                     # 여러 OCR 접근 방식 시도하여 최상의 결과 얻기
-                    page_text = try_multiple_ocr_approaches(img)
+                    page_text = perform_ocr(img)
                     
                     ocr_text += f"--- 페이지 {i + 1} ---\n{page_text}\n\n"
                 
@@ -210,7 +155,7 @@ def convert_pdf_to_txt(file_path):
                     img = Image.frombytes("RGB", [pix.width, pix.height], img_data)
                     
                     # OCR 시도
-                    page_text = try_multiple_ocr_approaches(img)
+                    page_text = perform_ocr(img)
                     ocr_text += f"--- 페이지 {page_number + 1} ---\n{page_text}\n\n"
             
             if ocr_text.strip():
