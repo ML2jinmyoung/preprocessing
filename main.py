@@ -13,9 +13,12 @@ import numpy as np
 from pdf2image import convert_from_path   
 
 pytesseract.pytesseract.tesseract_cmd = os.getenv("TESSERACT_PATH")
-INPUT_DIR = "/Users/jm/Desktop/test"
+INPUT_DIR = "/Users/jm/Desktop/test_copy"
 OUTPUT_DIR ="/Users/jm/Desktop/test_text"
 
+"""
+1. OCR 실행 함수 (전처리 > 다양한 방식 시도)
+"""
 def preprocess_image_for_ocr(image, lang='kor'):
     """OCR 정확도를 높이기 위해 이미지 전처리"""
     # PIL 이미지를 OpenCV 이미지로 변환
@@ -117,6 +120,10 @@ def try_multiple_ocr_approaches(image, lang='kor+eng'):
     # 최상의 결과 선택
     best_index = scores.index(max(scores)) if scores else 0
     return results[best_index]
+
+"""
+2. 각 파일 포맷에서 텍스트 추출하는 함수들
+"""
 
 def convert_image_to_txt(file_path):
     """이미지 파일(PNG, JPG 등)에서 텍스트 추출"""
@@ -269,8 +276,10 @@ def convert_xlsx_to_txt(file_path):
         text = f"[⚠️ XLSX 추출 중 에러: {e}]"
     return text
 
+"""
+3. 파일 확장자에 따라 함수 실행
+"""
 def convert_file_to_txt(file_path):
-    """파일 확장자에 따라 함수 실행"""
     ext = os.path.splitext(file_path)[1].lower()
     
     if ext in [".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif"]:
@@ -290,19 +299,20 @@ def convert_file_to_txt(file_path):
         except:
             return f"⚠️ 지원되지 않는 파일 형식입니다: {ext}"
 
+"""
+4. main()
+"""
 def main(input_dir, output_dir):
     for root, dirs, files in os.walk(input_dir):
         for file in files:
             file_path = os.path.join(root, file)
-            relative_path = os.path.relpath(root, input_dir)
+            relative_path = os.path.relpath(file_path, os.path.dirname(input_dir))    
             
-            # 숨겨진 파일 건너뛰기
             if file.startswith('.'):
                 continue
                 
             print(f"변환 중: {file_path}")
             
-            # 파일 확장자 확인
             ext = os.path.splitext(file)[1].lower()
             
             if ext in [".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".pdf"]:
