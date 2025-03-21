@@ -15,7 +15,7 @@ OUTPUT_DIR = "../result"
 
 
 """
-2. 각 파일 포맷에서 텍스트 추출하는 함수들
+1. 각 파일 포맷에서 텍스트 추출하는 함수들
 """
 
 def convert_image_to_txt(file_path):
@@ -205,7 +205,7 @@ def convert_xlsx_to_txt(file_path):
     return text
 
 """
-3. 파일 확장자에 따라 함수 실행
+2. 파일 확장자에 따라 함수 실행
 """
 def convert_file_to_txt(file_path):
     ext = os.path.splitext(file_path)[1].lower()
@@ -235,7 +235,7 @@ def convert_file_to_txt(file_path):
             return f"⚠️ 지원되지 않는 파일 형식입니다: {ext}"
 
 """
-4. main()
+3. main()
 """
 def main(input_dir, output_dir):
     os.makedirs(output_dir, exist_ok=True)
