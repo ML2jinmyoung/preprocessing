@@ -9,7 +9,6 @@ from PIL import Image
 import fitz  # PyMuPDF
 from ocr import try_multiple_ocr_approaches
 
-# 경로 설정
 INPUT_DIR = "../test"
 OUTPUT_DIR = "../result"
 
@@ -34,8 +33,7 @@ def convert_image_to_txt(file_path):
         except Exception as e:
             print(f"[⚠️ DPI 확인 오류: {e}]")
         
-        # PaddleOCR로 텍스트 추출
-        text = try_multiple_ocr_approaches(image)
+        text = try_multiple_ocr_approaches(image, 'image')
         
         if not text.strip():
             return "[이미지에서 텍스트를 추출할 수 없습니다]"
@@ -80,7 +78,7 @@ def convert_pdf_to_txt(file_path):
                     print(f"  페이지 {i+1}/{len(images)} OCR 처리 중...")
                     
                     # PaddleOCR로 텍스트 추출
-                    page_text = try_multiple_ocr_approaches(img)
+                    page_text = try_multiple_ocr_approaches(img, 'pdf')
                     
                     ocr_text += f"--- 페이지 {i + 1} ---\n{page_text}\n\n"
                 
@@ -279,8 +277,5 @@ def main(input_dir, output_dir):
 if __name__ == "__main__":
     input_dir = INPUT_DIR
     output_dir = OUTPUT_DIR
-    
-    # PaddleOCR 모델이 처음 실행 시 자동으로 다운로드됨
-    print("PaddleOCR 초기화 중...")
     
     main(input_dir, output_dir)

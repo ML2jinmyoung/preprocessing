@@ -2,10 +2,16 @@ import re
 import cv2
 import numpy as np
 import pytesseract
+import easyocr
 from PIL import Image
 
 pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
 
+reader = easyocr.Reader(['en', 'ko'])
+
+"""
+전처리
+"""
 def preprocess_image_for_ocr(image, lang='kor'):
     """OCR 정확도를 높이기 위해 이미지 전처리"""
     # PIL 이미지를 OpenCV 이미지로 변환
@@ -14,7 +20,7 @@ def preprocess_image_for_ocr(image, lang='kor'):
         # 이미지가 RGBA인 경우 RGB로 변환
         if image.shape[2] == 4:
             image = cv2.cvtColor(image, cv2.COLOR_RGBA2RGB)
-        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
     # 원본 이미지 복사
     original = image.copy()
@@ -48,8 +54,18 @@ def preprocess_image_for_ocr(image, lang='kor'):
     # 결과 이미지를 PIL 형식으로 변환
     return Image.fromarray(processed)
 
-def try_multiple_ocr_approaches(image, lang='kor+eng'):
-    """여러 OCR 접근 방식을 시도하여 최상의 결과 반환"""
+
+
+"""
+다양한 OCR 방식 시도후 점수 높은 결과 반환. 
+(단어 수, 평균 단어 길이 등)
+
+- 스캔된 pdf의 경우 easyOCR 사용
+- 이미지 파일의 경우 pytesseract 사용
+"""
+
+
+def try_multiple_ocr_approaches(image, format, lang='kor+eng'):
     results = []
     scores = []
 
@@ -59,9 +75,17 @@ def try_multiple_ocr_approaches(image, lang='kor+eng'):
 
     # 첫 번째 시도 - 원본 이미지
     try:
-        text1 = pytesseract.image_to_string(original_img, config=custom_config1)
+        if format == 'pdf':
+            if isinstance(original_img, Image.Image):
+                img_array = np.array(original_img)
+            else:
+                img_array = original_img
+            detection1 = reader.readtext(img_array)
+            text1 = ' '.join([item[1] for item in detection1])
+        else:
+            text1 = pytesseract.image_to_string(original_img, config=custom_config1)
+            
         results.append(text1)
-        # 간단한 텍스트 품질 점수 계산 (단어 수, 평균 단어 길이 등)
         words = text1.split()
         score1 = len(words) * sum(len(w) for w in words) / max(1, len(words))
         scores.append(score1)
@@ -73,10 +97,16 @@ def try_multiple_ocr_approaches(image, lang='kor+eng'):
     # 두 번째 시도 - 전처리된 이미지
     try:
         processed_img = preprocess_image_for_ocr(original_img, 'kor')
-        custom_config2 = f'--oem 1 --psm 3 -l {lang} --dpi 300'
-        text2 = pytesseract.image_to_string(processed_img, config=custom_config2)
+        
+        if format == 'pdf':
+            processed_array = np.array(processed_img)
+            detection2 = reader.readtext(processed_array)
+            text2 = ' '.join([item[1] for item in detection2])
+        else:
+            custom_config2 = f'--oem 1 --psm 3 -l {lang} --dpi 300'
+            text2 = pytesseract.image_to_string(processed_img, config=custom_config2)
+        
         results.append(text2)
-
         words = text2.split()
         score2 = len(words) * sum(len(w) for w in words) / max(1, len(words))
         scores.append(score2)
@@ -93,12 +123,16 @@ def try_multiple_ocr_approaches(image, lang='kor+eng'):
 
         # 히스토그램 평활화 적용
         enhanced = cv2.equalizeHist(img_array)
-        enhanced_img = Image.fromarray(enhanced)
-
-        custom_config3 = f'--oem 1 --psm 1 -l {lang} --dpi 300'
-        text3 = pytesseract.image_to_string(enhanced_img, config=custom_config3)
+        
+        if format == 'pdf':
+            detection3 = reader.readtext(enhanced)
+            text3 = ' '.join([item[1] for item in detection3])
+        else:
+            enhanced_img = Image.fromarray(enhanced)
+            custom_config3 = f'--oem 1 --psm 1 -l {lang} --dpi 300'
+            text3 = pytesseract.image_to_string(enhanced_img, config=custom_config3)
+            
         results.append(text3)
-
         words = text3.split()
         score3 = len(words) * sum(len(w) for w in words) / max(1, len(words))
         scores.append(score3)
