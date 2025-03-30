@@ -20,7 +20,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG = {
-    'input_dir': "../test copy",
+    'input_dir': "../test",
     'output_dir': "../result",
     'min_text_length': 100,
     'pdf_dpi': 300,
@@ -159,7 +159,7 @@ class DocumentConverter:
         for i, img in enumerate(images, 1):
             logger.info(f"페이지 {i}/{len(images)} OCR 처리 중...")
             page_text = try_multiple_ocr_approaches(img, 'pdf')
-            text += f"--- 페이지 {i} ---\n{page_text}\n\n"
+            text += f"{page_text}\n\n"
         return text
 
     def _convert_doc_to_txt(self, file_path: str) -> ConversionResult:
@@ -305,20 +305,49 @@ class DocumentConverter:
         else:
             logger.error(f"변환 실패 ({relative_path}): {result.error}")
 
+    # def _save_result(self, content: str, file_path: Path, relative_path: Path, output_path: Path) -> None:
+    #     """
+    #     변환 결과 저장
+    #     """
+    #     try:
+    #         header = f"File: {file_path.name}\nPath: {relative_path}\n{'='*40}\n"
+    #         out_file = output_path / relative_path.parent / f"{file_path.stem}.txt"
+    #         out_file.parent.mkdir(parents=True, exist_ok=True)
+            
+    #         with open(out_file, "w", encoding="utf-8") as f:
+    #             f.write(header + content)
+    #         logger.info(f"성공: {out_file}")
+    #     except Exception as e:
+    #         logger.error(f"저장 실패 ({out_file}): {e}")
+
+    def _chunk_text(self, text: str, chunk_size: int = 1000) -> str:
+        """
+        텍스트를 chunk_size 만큼 나누고 구분자 삽입
+        """
+        chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
+        chunked_text = ""
+        for idx, chunk in enumerate(chunks):
+            chunked_text += f"--- Chunk {idx} ---\n{chunk.strip()}\n\n"
+        return chunked_text
+    
     def _save_result(self, content: str, file_path: Path, relative_path: Path, output_path: Path) -> None:
         """
-        변환 결과 저장
+        변환 결과 저장 (본문을 chunk로 나눔)
         """
         try:
             header = f"File: {file_path.name}\nPath: {relative_path}\n{'='*40}\n"
+            chunked_body = self._chunk_text(content, chunk_size=1000)
+            
             out_file = output_path / relative_path.parent / f"{file_path.stem}.txt"
             out_file.parent.mkdir(parents=True, exist_ok=True)
             
             with open(out_file, "w", encoding="utf-8") as f:
-                f.write(header + content)
-            logger.info(f"성공: {out_file}")
+                f.write(header + chunked_body)
+                
+            logger.info(f"성공: {out_file} ({chunked_body.count('--- Chunk')}) chunks)")
         except Exception as e:
             logger.error(f"저장 실패 ({out_file}): {e}")
+
 
 def main():
     """
