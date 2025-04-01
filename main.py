@@ -305,21 +305,6 @@ class DocumentConverter:
         else:
             logger.error(f"변환 실패 ({relative_path}): {result.error}")
 
-    # def _save_result(self, content: str, file_path: Path, relative_path: Path, output_path: Path) -> None:
-    #     """
-    #     변환 결과 저장
-    #     """
-    #     try:
-    #         header = f"File: {file_path.name}\nPath: {relative_path}\n{'='*40}\n"
-    #         out_file = output_path / relative_path.parent / f"{file_path.stem}.txt"
-    #         out_file.parent.mkdir(parents=True, exist_ok=True)
-            
-    #         with open(out_file, "w", encoding="utf-8") as f:
-    #             f.write(header + content)
-    #         logger.info(f"성공: {out_file}")
-    #     except Exception as e:
-    #         logger.error(f"저장 실패 ({out_file}): {e}")
-
     def _chunk_text(self, text: str, chunk_size: int = 1000) -> str:
         """
         텍스트를 chunk_size 만큼 나누고 구분자 삽입
