@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+
+web_disk/
+
 # C extensions
 *.so
 

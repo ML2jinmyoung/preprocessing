@@ -2,12 +2,14 @@ import re
 import cv2
 import numpy as np
 import pytesseract
-import easyocr
 from PIL import Image
 from typing import Union, List, Tuple, Optional
 from dataclasses import dataclass
+import easyocr
 
-pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
+# pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
+pytesseract.pytesseract.tesseract_cmd = '/opt/anaconda3/envs/pdf2txt/bin/pytesseract'
+
 reader = easyocr.Reader(['en', 'ko'])
 
 OCR_CONFIGS = {
