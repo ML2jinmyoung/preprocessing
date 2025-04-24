@@ -4,8 +4,14 @@ __pycache__/
 *$py.class
 
 
+<<<<<<< HEAD
 web_disk/
 
+=======
+demo/
+result/
+web_disk/
+>>>>>>> f3372cb (libreoffice 사용하여 문서 변환)
 # C extensions
 *.so
 

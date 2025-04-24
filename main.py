@@ -12,7 +12,11 @@ from pdf2image import convert_from_path
 from PIL import Image
 import fitz  # PyMuPDF
 from ocr import try_multiple_ocr_approaches
+<<<<<<< HEAD
 import mammoth
+=======
+import traceback
+>>>>>>> f3372cb (libreoffice 사용하여 문서 변환)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,13 +25,21 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG = {
+<<<<<<< HEAD
     'input_dir': "./test",
     'output_dir': "./web_disk_result",
+=======
+    'input_dir': "./web_disk",
+    'output_dir': "./result",
+>>>>>>> f3372cb (libreoffice 사용하여 문서 변환)
     'min_text_length': 100,
     'pdf_dpi': 300,
     'pdf_zoom': 4,
     'image_min_dpi': 200,
-    'image_target_dpi': 300
+    'image_target_dpi': 300,
+    'chunk_size': 1000,
+    'overlap_size': 50
+    
 }
 
 SUPPORTED_FORMATS = {
@@ -36,6 +48,8 @@ SUPPORTED_FORMATS = {
     'presentation': ['.ppt', '.pptx'],
     'spreadsheet': ['.xls', '.xlsx']
 }
+
+DOCUMENT_GROUP = 'LAW'
 
 @dataclass
 class ConversionResult:
@@ -47,6 +61,7 @@ class DocumentConverter:
     def __init__(self, config: dict = None):
         self.config = config or DEFAULT_CONFIG
         self._setup_converters()
+        self.failed_files = []
 
     def _setup_converters(self) -> None:
         """
@@ -84,10 +99,10 @@ class DocumentConverter:
             text = try_multiple_ocr_approaches(image, 'image')
             
             if not text.strip():
-                return ConversionResult(False, "", "텍스트를 추출할 수 없습니다")
+                return ConversionResult(False, "", "‼️ 텍스트를 추출할 수 없습니다")
             return ConversionResult(True, text)
         except Exception as e:
-            return ConversionResult(False, "", f"이미지 처리 중 에러: {str(e)}")
+            return ConversionResult(False, "", f"‼️ 이미지 처리 중 에러: {str(e)}")
 
     def _convert_pdf_to_txt(self, file_path: str) -> ConversionResult:
         """
@@ -97,9 +112,9 @@ class DocumentConverter:
             text = self._extract_pdf_text(file_path)
             if len(text.strip()) < self.config['min_text_length']:
                 text = self._process_scanned_pdf(file_path)
-            return ConversionResult(True, text) if text.strip() else ConversionResult(False, "", "텍스트 추출 실패")
+            return ConversionResult(True, text) if text.strip() else ConversionResult(False, "", "‼️ 텍스트 추출 실패")
         except Exception as e:
-            return ConversionResult(False, "", f"PDF 처리 중 에러: {str(e)}")
+            return ConversionResult(False, "", f"‼️ PDF 처리 중 에러: {str(e)}")
 
     def _extract_pdf_text(self, file_path: str) -> str:
         """
@@ -120,7 +135,7 @@ class DocumentConverter:
         try:
             return self._process_with_pdf2image(file_path)
         except Exception as e:
-            logger.warning(f"PDF2Image 실패, PyMuPDF 시도: {e}")
+            logger.warning(f"‼️ PDF2Image 실패, PyMuPDF 시도: {e}")
             return self._process_with_pymupdf(file_path)
 
     def _process_with_pdf2image(self, file_path: str) -> str:
@@ -158,7 +173,7 @@ class DocumentConverter:
         """
         text = ""
         for i, img in enumerate(images, 1):
-            logger.info(f"페이지 {i}/{len(images)} OCR 처리 중...")
+            # logger.info(f"페이지 {i}/{len(images)} OCR 처리 중...")
             page_text = try_multiple_ocr_approaches(img, 'pdf')
             text += f"{page_text}\n\n"
         return text
@@ -174,23 +189,32 @@ class DocumentConverter:
             else:
                 return self._convert_doc(file_path)
         except Exception as e:
+<<<<<<< HEAD
             import traceback
             trace = traceback.format_exc()
             return ConversionResult(False, "", f"문서 처리 중 에러: {str(e)}{{trace}}")
+=======
+            return ConversionResult(False, "", f"‼️ 문서 처리 중 에러: {str(e)}")
+>>>>>>> f3372cb (libreoffice 사용하여 문서 변환)
 
     def _convert_docx(self, file_path: str) -> ConversionResult:
         """
-        DOCX 파일 처리
+        DOCX 파일 처리 (docx2txt 라이브러리 사용)
         """
-        from docx import Document
-        doc = Document(file_path)
-        text = "\n".join(para.text for para in doc.paragraphs)
-        return ConversionResult(True, text)
+        try:
+            import docx2txt
+            text = docx2txt.process(file_path)
+            return ConversionResult(True, text)
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            return ConversionResult(False, f"DOCX 변환 중 오류 발생: {str(e)}\n{tb}")
+
 
 
     def _convert_doc(self, file_path: str) -> ConversionResult:
         """
-        DOC 파일 처리
+        DOC 파일 처리 (실제 RTF 포맷인지 확인)
         """
         for tool in ['antiword', 'catdoc']:
             try:
@@ -198,7 +222,8 @@ class DocumentConverter:
                 return ConversionResult(True, result.stdout)
             except:
                 continue
-        return ConversionResult(False, "", "DOC 파일 처리 실패")
+        return ConversionResult(False, "", "‼️ DOC 파일 처리 실패")
+
 
     def _convert_pptx_to_txt(self, file_path: str) -> ConversionResult:
         """
@@ -216,7 +241,7 @@ class DocumentConverter:
                 result = subprocess.run(['pptx2txt', file_path], capture_output=True, text=True, check=True)
                 return ConversionResult(True, result.stdout)
             except:
-                return ConversionResult(False, "", f"프레젠테이션 처리 중 에러: {str(e)}")
+                return ConversionResult(False, "", f"‼️ 프레젠테이션 처리 중 에러: {str(e)}")
 
     def _convert_xlsx_to_txt(self, file_path: str) -> ConversionResult:
         """
@@ -225,7 +250,7 @@ class DocumentConverter:
         try:
             return self._convert_xlsx_with_openpyxl(file_path)
         except Exception as e:
-            logger.warning(f"OpenPyXL 실패, xlsx2csv 시도: {e}")
+            logger.warning(f"‼️ OpenPyXL 실패, xlsx2csv 시도: {e}")
             return self._convert_xlsx_with_xlsx2csv(file_path)
 
     def _convert_xlsx_with_openpyxl(self, file_path: str) -> ConversionResult:
@@ -277,9 +302,9 @@ class DocumentConverter:
                 with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
                     return ConversionResult(True, f.read())
             
-            return ConversionResult(False, "", f"지원되지 않는 파일 형식: {Path(file_path).suffix}")
+            return ConversionResult(False, "", f"‼️ 지원되지 않는 파일 형식: {Path(file_path).suffix}")
         except Exception as e:
-            return ConversionResult(False, "", f"파일 처리 중 에러: {str(e)}")
+            return ConversionResult(False, "", f"‼️ 파일 처리 중 에러: {str(e)}")
 
     def process_directory(self, input_dir: str, output_dir: str) -> None:
         """
@@ -289,8 +314,16 @@ class DocumentConverter:
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
+        supported_exts = set()
+        for ext_list in SUPPORTED_FORMATS.values():
+            supported_exts.update(ext_list)
+
         for file_path in input_path.rglob('*'):
             if file_path.is_file() and not file_path.name.startswith('.'):
+                ext = file_path.suffix.lower()
+                if ext not in supported_exts:
+                    print(f"⚠️ 지원하지 않는 포맷: {file_path}")
+                    continue
                 self._process_single_file(file_path, input_path, output_path)
 
     def _process_single_file(self, file_path: Path, input_path: Path, output_path: Path) -> None:
@@ -308,34 +341,56 @@ class DocumentConverter:
             self._save_result(result.content, file_path, relative_path, output_path)
         else:
             logger.error(f"변환 실패 ({relative_path}): {result.error}")
+            self.failed_files.append((str(relative_path), result.error))
 
-    def _chunk_text(self, text: str, chunk_size: int = 1000) -> str:
+
+    def _chunk_text(self, text: str, chunk_size: int = DEFAULT_CONFIG['chunk_size'], overlap: int = DEFAULT_CONFIG['overlap_size']) -> str:
         """
-        텍스트를 chunk_size 만큼 나누고 구분자 삽입
+        텍스트를 chunk_size 만큼 나누고, overlap만큼 간격 주고 <Chunk> 태그로 감싸고 <Content>로 전체 감쌈
         """
-        chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
-        chunked_text = ""
-        for idx, chunk in enumerate(chunks):
-            chunked_text += f"--- Chunk {idx} ---\n{chunk.strip()}\n\n"
+        chunks = []
+        start = 0
+        while start < len(text):
+            end = start + chunk_size
+            chunks.append(text[start:end])
+            start += chunk_size - overlap  # 겹치도록 다음 시작 위치 설정
+
+        chunked_text = "<Content>\n"
+        for chunk in chunks:
+            chunked_text += f"<Chunk>\n{chunk.strip()}\n</Chunk>\n\n"
+        chunked_text += "</Content>\n"
         return chunked_text
-    
+
+
     def _save_result(self, content: str, file_path: Path, relative_path: Path, output_path: Path) -> None:
         """
-        변환 결과 저장 (본문을 chunk로 나눔)
+        변환 결과 저장 (<Metadata>, <Content> 포함, 전체를 <Document>로 감쌈)
         """
         try:
-            header = f"File: {file_path.name}\nPath: {relative_path}\n{'='*40}\n"
+            metadata = (
+                "<Metadata>\n"
+                f"    <Group>{DOCUMENT_GROUP}</Group>\n"
+                f"    <File>{file_path.name}</File>\n"
+                f"    <Path>{relative_path}</Path>\n"
+                "</Metadata>\n\n"
+            )
             chunked_body = self._chunk_text(content, chunk_size=1000)
-            
+
+            document_text = "<Document>\n" + metadata + chunked_body + "</Document>\n"
+
             out_file = output_path / relative_path.parent / f"{file_path.stem}.txt"
             out_file.parent.mkdir(parents=True, exist_ok=True)
-            
+
             with open(out_file, "w", encoding="utf-8") as f:
-                f.write(header + chunked_body)
-                
-            logger.info(f"성공: {out_file} ({chunked_body.count('--- Chunk')}) chunks)")
+                f.write(document_text)
+
+            chunk_count = chunked_body.count("<Chunk>")
+            logger.info(f"성공: {out_file} ({chunk_count} chunks)")
         except Exception as e:
             logger.error(f"저장 실패 ({out_file}): {e}")
+
+
+
 
 
 def main():
@@ -344,6 +399,14 @@ def main():
     """
     converter = DocumentConverter()
     converter.process_directory(DEFAULT_CONFIG['input_dir'], DEFAULT_CONFIG['output_dir'])
+
+    if converter.failed_files:
+        print("\n=== ❌ 변환 실패 파일 목록 ===")
+        for path, error in converter.failed_files:
+            print(f"- {path}: {error}")
+    else:
+        print("\n🎉 모든 파일이 성공적으로 처리되었습니다.")
+
 
 if __name__ == "__main__":
     main()
