@@ -4,7 +4,7 @@ import subprocess
 def convert_ppt_to_pdf_in_dir(root_dir):
     for dirpath, dirnames, filenames in os.walk(root_dir):
         for filename in filenames:
-            if filename.lower().endswith((".ppt", ".pptx")):
+            if filename.lower().endswith((".ppt", ".pptx", ".PPT", ".PPTX")):
                 ppt_path = os.path.join(dirpath, filename)
                 print(f"🔄 변환 중: {ppt_path}")
                 try:

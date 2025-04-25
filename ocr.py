@@ -1,31 +1,27 @@
-import re
 import cv2
 import numpy as np
 import pytesseract
 from PIL import Image
-from typing import Union, List, Tuple, Optional
+from typing import Union
 from dataclasses import dataclass
 import easyocr
 
-# pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
-pytesseract.pytesseract.tesseract_cmd = '/opt/anaconda3/envs/pdf2txt/bin/pytesseract'
+# Configure Tesseract executable path
+pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
 
-reader = easyocr.Reader(['en', 'ko'])
-
-OCR_CONFIGS = {
-    'default': '--oem 1 --dpi 300',
-    'accurate': '--psm 6',  # 균일한 블록의 텍스트
-    'mixed': '--psm 3',     # 컬럼이 있는 텍스트
-    'sparse': '--psm 1'     # 방향 감지와 함께 OSD
+# Initialize EasyOCR readers for each language combination
+READERS = {
+    'ko': easyocr.Reader(['ko', 'en']),       # Korean + English
+    'ja': easyocr.Reader(['ja', 'en']),       # Japanese + English
+    'en': easyocr.Reader(['en'])              # English only
 }
 
-PREPROCESSING_PARAMS = {
-    'gaussian_blur': (3, 3),
-    'adaptive_threshold': {
-        'block_size': 11,
-        'C': 2
-    },
-    'morph_kernel': (1, 1)
+# Tesseract config presets
+default_config = '--oem 1 --dpi 300'
+config_presets = {
+    'accurate': '--psm 6',
+    'mixed': '--psm 3',
+    'sparse': '--psm 1'
 }
 
 @dataclass
@@ -34,103 +30,123 @@ class OCRResult:
     score: float
     method: str
 
-def ensure_numpy_array(image: Union[Image.Image, np.ndarray]) -> np.ndarray:
-    """
-    이미지를 numpy array로 변환
-    """
+
+def ensure_numpy(image: Union[Image.Image, np.ndarray]) -> np.ndarray:
     if isinstance(image, Image.Image):
-        image = np.array(image)
-        if len(image.shape) == 3 and image.shape[2] == 4:  # RGBA to RGB to BGR
-            image = cv2.cvtColor(image, cv2.COLOR_RGBA2RGB)
-            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        arr = np.array(image)
+        if arr.ndim == 3 and arr.shape[2] == 4:
+            arr = cv2.cvtColor(arr, cv2.COLOR_RGBA2RGB)
+            arr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+        return arr
     return image
 
-def get_ocr_config(mode: str, lang: str) -> str:
-    """
-    OCR 설정 생성
-    """
-    base_config = OCR_CONFIGS['default']
-    specific_config = OCR_CONFIGS.get(mode, OCR_CONFIGS['accurate'])
-    return f"{base_config} {specific_config} -l {lang}"
 
-def calculate_text_score(text: str) -> float:
-    """
-    텍스트 품질 점수 계산
-    """
+def calc_score(text: str) -> float:
     words = text.split()
     if not words:
         return 0.0
     return len(words) * sum(len(w) for w in words) / len(words)
 
-def preprocess_image_for_ocr(image: Union[Image.Image, np.ndarray], lang: str = 'kor') -> Image.Image:
-    """
-    OCR 정확도를 높이기 위해 이미지 전처리
-    """
-    # numpy array로 변환
-    image = ensure_numpy_array(image)
-    
-    # 그레이스케일 변환
+
+def preprocess_for_tess(image: np.ndarray, lang: str) -> np.ndarray:
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-    if lang == 'kor':
-        # 한국어 텍스트 최적화 처리
-        blurred = cv2.GaussianBlur(gray, PREPROCESSING_PARAMS['gaussian_blur'], 0)
+    if lang == 'ko':
+        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
         thresh = cv2.adaptiveThreshold(
-            blurred, 
-            255, 
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY,
-            PREPROCESSING_PARAMS['adaptive_threshold']['block_size'],
-            PREPROCESSING_PARAMS['adaptive_threshold']['C']
+            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY, 11, 2
         )
-        kernel = np.ones(PREPROCESSING_PARAMS['morph_kernel'], np.uint8)
-        processed = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+        kernel = np.ones((1, 1), np.uint8)
+        return cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
     else:
-        # 기타 언어 처리 (OTSU 이진화)
-        _, processed = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        _, out = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        return out
 
-    return Image.fromarray(processed)
 
-def perform_ocr(image: Union[Image.Image, np.ndarray], config: str, format: str, method: str) -> OCRResult:
-    """
-    단일 OCR 시도 수행
-    """
-    try:
-        if format == 'pdf':
-            img_array = ensure_numpy_array(image)
-            detection = reader.readtext(img_array)
-            text = ' '.join([item[1] for item in detection])
-        else:
-            text = pytesseract.image_to_string(image, config=config)
-        
-        score = calculate_text_score(text)
-        return OCRResult(text=text, score=score, method=method)
-    except Exception as e:
-        print(f"OCR failed with method {method}: {str(e)}")
-        return OCRResult(text="", score=0.0, method=method)
+def get_tess_langs(lang: str) -> str:
+    if lang == 'ko':
+        return 'kor+eng'
+    if lang == 'ja':
+        return 'jpn+eng'
+    return 'eng'
 
-def try_multiple_ocr_approaches(image: Union[Image.Image, np.ndarray], format: str, lang: str = 'kor+eng') -> str:
-    """
-    다양한 OCR 방식 시도
-    """
-    # 이미지 준비
-    image_array = ensure_numpy_array(image)
-    
-    # OCR 시도 설정
-    attempts = [
-        (image_array, 'accurate', '원본'),
-        (preprocess_image_for_ocr(image_array, lang), 'mixed', '전처리'),
-        (cv2.equalizeHist(cv2.cvtColor(image_array, cv2.COLOR_BGR2GRAY)), 'sparse', '대비향상')
-    ]
 
-    # 각 방식으로 OCR 수행
+def get_tess_config(mode: str, lang: str) -> str:
+    preset = config_presets.get(mode, config_presets['accurate'])
+    langs = get_tess_langs(lang)
+    return f"{default_config} {preset} -l {langs}"
+
+
+def ocr_tesseract(image: Union[Image.Image, np.ndarray], mode: str, lang: str) -> OCRResult:
+    arr = ensure_numpy(image)
+    cfg = get_tess_config(mode, lang)
+    text = pytesseract.image_to_string(arr, config=cfg)
+    return OCRResult(text=text, score=calc_score(text), method=f"Tesseract-{mode}")
+
+
+def ocr_easyocr(image: Union[Image.Image, np.ndarray], lang: str) -> OCRResult:
+    arr = ensure_numpy(image)
+    reader = READERS.get(lang, READERS['en'])
+    results = reader.readtext(arr)
+    texts = [r[1] for r in results]
+    confs = [r[2] for r in results]
+    text = ' '.join(texts)
+    score = (sum(confs) / len(confs)) * len(texts) if confs else 0.0
+    return OCRResult(text=text, score=score, method=f"EasyOCR-{lang}")
+
+
+def detect_lang(image: Union[Image.Image, np.ndarray]) -> str:
+    """
+    이미지에서 텍스트 샘플을 추출한 후 유니코드 스크립트 기반으로 언어를 판별합니다.
+    - 한글 유니코드(0xAC00–0xD7A3) 발견 시 'ko'
+    - 히라가나(0x3040–0x309F) 또는 가타카나(0x30A0–0x30FF) 발견 시 'ja'
+    - CJK 통합 한자(0x4E00–0x9FFF)만 있고 모음 스크립트 없으면 'ja'
+    - 그 외 라틴 알파벳이 포함되면 'en'
+    """
+    arr = ensure_numpy(image)
+    # 영문 OCR로 샘플 텍스트 추출
+    sample = pytesseract.image_to_string(arr, config='--psm 6 -l eng')
+    has_cjk = False
+    for ch in sample:
+        code = ord(ch)
+        if 0xAC00 <= code <= 0xD7A3:
+            return 'ko'
+        if 0x3040 <= code <= 0x309F or 0x30A0 <= code <= 0x30FF:
+            return 'ja'
+        if 0x4E00 <= code <= 0x9FFF:
+            has_cjk = True
+    if has_cjk:
+        return 'ja'
+    # 라틴 알파벳 포함 여부
+    if any(('A' <= c <= 'Z') or ('a' <= c <= 'z') for c in sample):
+        return 'en'
+    # fallback
+    return 'en'
+
+def try_multiple_ocr_approaches(
+    image: Union[Image.Image, np.ndarray],
+    file_format: str
+) -> str:(
+    image: Union[Image.Image, np.ndarray],
+    file_format: str
+) -> str:
+    arr = ensure_numpy(image)
+    # PDF: EasyOCR만 사용
+    if file_format.lower() == 'pdf':
+        lang = detect_lang(arr)
+        return ocr_easyocr(arr, lang).text
+
+    # 자동 언어 감지
+    lang = detect_lang(arr)
+
+    # 다양한 OCR 시도
     results = []
-    for img, mode, method in attempts:
-        config = get_ocr_config(mode, lang)
-        result = perform_ocr(img, config, format, method)
-        results.append(result)
+    results.append(ocr_tesseract(arr, 'accurate', lang))
+    results.append(ocr_tesseract(preprocess_for_tess(arr, lang), 'mixed', lang))
+    gray = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
+    results.append(ocr_tesseract(cv2.equalizeHist(gray), 'sparse', lang))
+    results.append(ocr_easyocr(arr, lang))
 
-    # 최상의 결과 선택
-    best_result = max(results, key=lambda x: x.score)
-    print(f"Selected OCR method: {best_result.method} (score: {best_result.score:.2f})")
-    return best_result.text
+    best = max(results, key=lambda r: r.score)
+    print(f"Detected lang: {lang}, Selected method: {best.method} (score: {best.score:.2f})")
+    return best.text

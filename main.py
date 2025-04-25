@@ -12,11 +12,7 @@ from pdf2image import convert_from_path
 from PIL import Image
 import fitz  # PyMuPDF
 from ocr import try_multiple_ocr_approaches
-<<<<<<< HEAD
-import mammoth
-=======
 import traceback
->>>>>>> f3372cb (libreoffice 사용하여 문서 변환)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,13 +21,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG = {
-<<<<<<< HEAD
-    'input_dir': "./test",
-    'output_dir': "./web_disk_result",
-=======
     'input_dir': "./web_disk",
     'output_dir': "./result",
->>>>>>> f3372cb (libreoffice 사용하여 문서 변환)
     'min_text_length': 100,
     'pdf_dpi': 300,
     'pdf_zoom': 4,
@@ -189,13 +180,9 @@ class DocumentConverter:
             else:
                 return self._convert_doc(file_path)
         except Exception as e:
-<<<<<<< HEAD
             import traceback
             trace = traceback.format_exc()
             return ConversionResult(False, "", f"문서 처리 중 에러: {str(e)}{{trace}}")
-=======
-            return ConversionResult(False, "", f"‼️ 문서 처리 중 에러: {str(e)}")
->>>>>>> f3372cb (libreoffice 사용하여 문서 변환)
 
     def _convert_docx(self, file_path: str) -> ConversionResult:
         """
