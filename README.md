@@ -7,11 +7,7 @@
 
 
 ### 2. OCR:
-
-- check the installed path of pytesseract
-```
-pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
-```
+paddleocr-gpu / cuda12.6
 
 ### 3. Functions:
 1. main.py
