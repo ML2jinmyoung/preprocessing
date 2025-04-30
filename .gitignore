@@ -4,14 +4,15 @@ __pycache__/
 *$py.class
 
 
-<<<<<<< HEAD
-web_disk/
 
-=======
 demo/
 result/
 web_disk/
->>>>>>> f3372cb (libreoffice 사용하여 문서 변환)
+ocr_result/
+ocr_test/	
+pdf_test/
+result_web_disk_before/
+cudnn-local-repo-ubuntu2404-9.8.0_1.0-1_amd64.deb
 # C extensions
 *.so
 

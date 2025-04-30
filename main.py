@@ -5,13 +5,13 @@ import openpyxl
 import subprocess
 import tempfile
 import logging
+import gc
 from pathlib import Path
-from typing import Optional, Dict, Callable, Union
+from typing import Optional, Dict, Callable, Union, List
 from dataclasses import dataclass
 from pdf2image import convert_from_path
 from PIL import Image
 import fitz  # PyMuPDF
-from ocr import try_multiple_ocr_approaches
 import traceback
 
 logging.basicConfig(
@@ -21,23 +21,24 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG = {
-    'input_dir': "./web_disk",
-    'output_dir': "./result",
+    'input_dir': "./demo",
+    'output_dir': "./demo_result",
     'min_text_length': 100,
     'pdf_dpi': 300,
     'pdf_zoom': 4,
     'image_min_dpi': 200,
     'image_target_dpi': 300,
     'chunk_size': 1000,
-    'overlap_size': 50
-    
+    'overlap_size': 50,
+    'korean_threshold': 0.3,  # 한국어 비율 임계값 (더 낮게 설정)
+    'ocr_reset_interval': 10  # 이 횟수만큼 OCR을 수행하면 OCR 엔진을 재생성
 }
 
 SUPPORTED_FORMATS = {
     'image': ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif'],
     'document': ['.pdf', '.doc', '.docx'],
-    'presentation': ['.ppt', '.pptx'],
-    'spreadsheet': ['.xls', '.xlsx']
+    # 'presentation': ['.ppt', '.pptx'],
+    # 'spreadsheet': ['.xls', '.xlsx']
 }
 
 DOCUMENT_GROUP = 'LAW'
@@ -47,12 +48,36 @@ class ConversionResult:
     success: bool
     content: str
     error: Optional[str] = None
+    is_korean: bool = True  # 한국어 문서 여부를 저장하는 필드 추가
 
 class DocumentConverter:
     def __init__(self, config: dict = None):
         self.config = config or DEFAULT_CONFIG
         self._setup_converters()
         self.failed_files = []
+        self.non_korean_files = []  # 한국어가 아닌 문서 목록 추가
+        self.ocr_count = 0  # OCR 수행 횟수를 추적하는 카운터
+        self.ocr_instance = None  # OCR 인스턴스를 필요할 때만 생성
+        
+    def _get_ocr_instance(self):
+        """
+        OCR 인스턴스를 얻거나 필요시 재생성
+        """
+        if self.ocr_instance is None:
+            from ocr import get_ocr_instance, reset_ocr_instance
+            self.ocr_instance = get_ocr_instance()
+            self.ocr_count = 0
+            logger.info("새 OCR 인스턴스 생성됨")
+        
+        self.ocr_count += 1
+        
+        # 일정 횟수 이상 사용했다면 인스턴스 재생성 준비
+        if self.ocr_count >= self.config['ocr_reset_interval']:
+            reset_ocr_instance()
+            self.ocr_instance = None
+            gc.collect()  # 가비지 컬렉션 강제 실행
+            
+        return self.ocr_instance
 
     def _setup_converters(self) -> None:
         """
@@ -65,6 +90,16 @@ class DocumentConverter:
             **{ext: self._convert_pptx_to_txt for ext in ['.ppt', '.pptx']},
             **{ext: self._convert_xlsx_to_txt for ext in ['.xls', '.xlsx']}
         }
+
+    def _check_if_korean(self, text: str) -> bool:
+        """
+        is_korean_dominant 함수를 사용하여 한국어 문서인지 확인
+        """
+        if not text or len(text.strip()) == 0:
+            return False
+            
+        from ocr import is_korean_dominant
+        return is_korean_dominant(text, self.config['korean_threshold'])
 
     def _scale_image_if_needed(self, image: Image.Image) -> Image.Image:
         """
@@ -87,12 +122,22 @@ class DocumentConverter:
         try:
             image = Image.open(file_path).convert("RGB")
             image = self._scale_image_if_needed(image)
-            text = try_multiple_ocr_approaches(image, 'image')
+            
+            # OCR 처리를 위한 함수 호출 (ocr.py 분리)
+            from ocr import try_multiple_ocr_approaches
+            text = try_multiple_ocr_approaches(image)
+            
+            # OCR 처리 후 메모리 정리
+            image = None
+            gc.collect()
             
             if not text.strip():
                 return ConversionResult(False, "", "‼️ 텍스트를 추출할 수 없습니다")
+                
             return ConversionResult(True, text)
         except Exception as e:
+            logger.error(f"이미지 처리 중 에러: {str(e)}")
+            traceback.print_exc()
             return ConversionResult(False, "", f"‼️ 이미지 처리 중 에러: {str(e)}")
 
     def _convert_pdf_to_txt(self, file_path: str) -> ConversionResult:
@@ -103,8 +148,20 @@ class DocumentConverter:
             text = self._extract_pdf_text(file_path)
             if len(text.strip()) < self.config['min_text_length']:
                 text = self._process_scanned_pdf(file_path)
-            return ConversionResult(True, text) if text.strip() else ConversionResult(False, "", "‼️ 텍스트 추출 실패")
+                
+            if not text.strip():
+                return ConversionResult(False, "", "‼️ 텍스트 추출 실패")
+                
+            # PDF OCR 결과에 대해서만 한국어 체크
+            is_korean = self._check_if_korean(text)
+            if not is_korean:
+                logger.info(f"한국어가 아닌 PDF 문서 감지됨: {file_path}")
+                return ConversionResult(True, text, is_korean=False)
+                
+            return ConversionResult(True, text)
         except Exception as e:
+            logger.error(f"PDF 처리 중 에러: {str(e)}")
+            traceback.print_exc()
             return ConversionResult(False, "", f"‼️ PDF 처리 중 에러: {str(e)}")
 
     def _extract_pdf_text(self, file_path: str) -> str:
@@ -164,9 +221,17 @@ class DocumentConverter:
         """
         text = ""
         for i, img in enumerate(images, 1):
-            # logger.info(f"페이지 {i}/{len(images)} OCR 처리 중...")
-            page_text = try_multiple_ocr_approaches(img, 'pdf')
+            logger.info(f"페이지 {i}/{len(images)} OCR 처리 중...")
+            
+            # OCR 처리를 위한 함수 호출
+            from ocr import try_multiple_ocr_approaches
+            page_text = try_multiple_ocr_approaches(img)
             text += f"{page_text}\n\n"
+            
+            # 각 페이지 처리 후 메모리 정리
+            img = None
+            gc.collect()
+            
         return text
 
     def _convert_doc_to_txt(self, file_path: str) -> ConversionResult:
@@ -175,10 +240,13 @@ class DocumentConverter:
         """
         ext = Path(file_path).suffix.lower()
         try:
+            result = None
             if ext == '.docx':
-                return self._convert_docx(file_path)
+                result = self._convert_docx(file_path)
             else:
-                return self._convert_doc(file_path)
+                result = self._convert_doc(file_path)
+                    
+            return result
         except Exception as e:
             import traceback
             trace = traceback.format_exc()
@@ -195,9 +263,7 @@ class DocumentConverter:
         except Exception as e:
             import traceback
             tb = traceback.format_exc()
-            return ConversionResult(False, f"DOCX 변환 중 오류 발생: {str(e)}\n{tb}")
-
-
+            return ConversionResult(False, "", f"DOCX 변환 중 오류 발생: {str(e)}\n{tb}")
 
     def _convert_doc(self, file_path: str) -> ConversionResult:
         """
@@ -211,7 +277,6 @@ class DocumentConverter:
                 continue
         return ConversionResult(False, "", "‼️ DOC 파일 처리 실패")
 
-
     def _convert_pptx_to_txt(self, file_path: str) -> ConversionResult:
         """
         PPT/PPTX 파일에서 텍스트 추출
@@ -222,6 +287,7 @@ class DocumentConverter:
                 shape.text for slide in prs.slides 
                 for shape in slide.shapes if hasattr(shape, "text")
             )
+            
             return ConversionResult(True, text)
         except Exception as e:
             try:
@@ -235,10 +301,12 @@ class DocumentConverter:
         XLSX/XLS 파일에서 텍스트 추출
         """
         try:
-            return self._convert_xlsx_with_openpyxl(file_path)
+            result = self._convert_xlsx_with_openpyxl(file_path)
+            return result
         except Exception as e:
             logger.warning(f"‼️ OpenPyXL 실패, xlsx2csv 시도: {e}")
-            return self._convert_xlsx_with_xlsx2csv(file_path)
+            result = self._convert_xlsx_with_xlsx2csv(file_path)
+            return result
 
     def _convert_xlsx_with_openpyxl(self, file_path: str) -> ConversionResult:
         """
@@ -275,7 +343,12 @@ class DocumentConverter:
         if not converter:
             return self._handle_unknown_format(file_path)
             
-        return converter(file_path)
+        result = converter(file_path)
+        
+        # 파일 변환 후 메모리 정리
+        gc.collect()
+        
+        return result
 
     def _handle_unknown_format(self, file_path: str) -> ConversionResult:
         """
@@ -287,11 +360,19 @@ class DocumentConverter:
             
             if 'text' in file_type:
                 with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                    return ConversionResult(True, f.read())
+                    text = f.read()
+                    return ConversionResult(True, text)
             
             return ConversionResult(False, "", f"‼️ 지원되지 않는 파일 형식: {Path(file_path).suffix}")
         except Exception as e:
             return ConversionResult(False, "", f"‼️ 파일 처리 중 에러: {str(e)}")
+
+    def _display_progress(self, current: int, total: int, file_name: str) -> None:
+        """
+        진행 상황을 표시
+        """
+        progress = (current / total) * 100
+        print(f"\r[{current}/{total}] ({progress:.1f}%) Processing: {file_name}", end="")
 
     def process_directory(self, input_dir: str, output_dir: str) -> None:
         """
@@ -304,14 +385,44 @@ class DocumentConverter:
         supported_exts = set()
         for ext_list in SUPPORTED_FORMATS.values():
             supported_exts.update(ext_list)
-
-        for file_path in input_path.rglob('*'):
-            if file_path.is_file() and not file_path.name.startswith('.'):
-                ext = file_path.suffix.lower()
-                if ext not in supported_exts:
-                    print(f"⚠️ 지원하지 않는 포맷: {file_path}")
-                    continue
-                self._process_single_file(file_path, input_path, output_path)
+            
+        # 처리할 모든 파일 목록 미리 수집
+        all_files = [
+            file_path for file_path in input_path.rglob('*')
+            if file_path.is_file() and not file_path.name.startswith('.')
+            and file_path.suffix.lower() in supported_exts
+        ]
+        
+        total_files = len(all_files)
+        print(f"\n📄 총 {total_files}개의 파일을 처리합니다.\n")
+        
+        try:
+            # 배치 단위로 파일 처리
+            batch_size = 5  # 한 번에 처리할 파일 수
+            for i in range(0, total_files, batch_size):
+                batch_files = all_files[i:i+batch_size]
+                
+                for idx, file_path in enumerate(batch_files):
+                    current_file_num = i + idx + 1
+                    try:
+                        # _display_progress(current_file_num, total_files, file_path.name)
+                        self._process_single_file(file_path, input_path, output_path)
+                    except Exception as e:
+                        logger.error(f"\n❌ 파일 처리 실패 ({file_path.name}): {str(e)}")
+                        self.failed_files.append((str(file_path), str(e)))
+                        continue
+                    
+                # 배치 처리 후 메모리 정리
+                from ocr import reset_ocr_instance
+                reset_ocr_instance()
+                self.ocr_instance = None
+                gc.collect()
+            
+                print()  # 새 줄로 이동
+            
+        except Exception as e:
+            logger.error(f"\n❌ 디렉토리 처리 중 오류 발생: {str(e)}")
+            raise
 
     def _process_single_file(self, file_path: Path, input_path: Path, output_path: Path) -> None:
         """
@@ -325,16 +436,28 @@ class DocumentConverter:
 
         result = self.convert_file(str(file_path))
         if result.success:
-            self._save_result(result.content, file_path, relative_path, output_path)
+            # 한국어 문서인 경우에만 결과 저장
+            if result.is_korean:
+                self._save_result(result.content, file_path, relative_path, output_path)
+            else:
+                # 한국어가 아닌 경우 변환 실패 목록에 추가
+                error_msg = "한국어가 아닌 문서"
+                logger.warning(f"한국어가 아닌 문서 감지됨: {relative_path}")
+                self.non_korean_files.append((str(relative_path), error_msg))
+                self._save_result(result.content, file_path, relative_path, output_path)
         else:
             logger.error(f"변환 실패 ({relative_path}): {result.error}")
             self.failed_files.append((str(relative_path), result.error))
 
-
-    def _chunk_text(self, text: str, chunk_size: int = DEFAULT_CONFIG['chunk_size'], overlap: int = DEFAULT_CONFIG['overlap_size']) -> str:
+    def _chunk_text(self, text: str, chunk_size: int = None, overlap: int = None) -> str:
         """
         텍스트를 chunk_size 만큼 나누고, overlap만큼 간격 주고 <Chunk> 태그로 감싸고 <Content>로 전체 감쌈
         """
+        if chunk_size is None:
+            chunk_size = self.config['chunk_size']
+        if overlap is None:
+            overlap = self.config['overlap_size']
+            
         chunks = []
         start = 0
         while start < len(text):
@@ -348,10 +471,9 @@ class DocumentConverter:
         chunked_text += "</Content>\n"
         return chunked_text
 
-
     def _save_result(self, content: str, file_path: Path, relative_path: Path, output_path: Path) -> None:
         """
-        변환 결과 저장 (<Metadata>, <Content> 포함, 전체를 <Document>로 감쌈)
+        변환 결과 저장
         """
         try:
             metadata = (
@@ -361,7 +483,7 @@ class DocumentConverter:
                 f"    <Path>{relative_path}</Path>\n"
                 "</Metadata>\n\n"
             )
-            chunked_body = self._chunk_text(content, chunk_size=1000)
+            chunked_body = self._chunk_text(content)
 
             document_text = "<Document>\n" + metadata + chunked_body + "</Document>\n"
 
@@ -372,13 +494,9 @@ class DocumentConverter:
                 f.write(document_text)
 
             chunk_count = chunked_body.count("<Chunk>")
-            logger.info(f"성공: {out_file} ({chunk_count} chunks)")
+            print(f"\n✅ 완료: {file_path.name} ({chunk_count} chunks)")
         except Exception as e:
-            logger.error(f"저장 실패 ({out_file}): {e}")
-
-
-
-
+            logger.error(f"\n❌ 저장 실패 ({out_file}): {e}")
 
 def main():
     """
@@ -387,11 +505,21 @@ def main():
     converter = DocumentConverter()
     converter.process_directory(DEFAULT_CONFIG['input_dir'], DEFAULT_CONFIG['output_dir'])
 
+    print_failure_list = False
+    
+    if converter.non_korean_files:
+        print("\n=== ❌ 한국어가 아닌 파일 목록 ===")
+        for path, error in converter.non_korean_files:
+            print(f"- {path}: {error}")
+        print_failure_list = True
+    
     if converter.failed_files:
         print("\n=== ❌ 변환 실패 파일 목록 ===")
         for path, error in converter.failed_files:
             print(f"- {path}: {error}")
-    else:
+        print_failure_list = True
+    
+    if not print_failure_list:
         print("\n🎉 모든 파일이 성공적으로 처리되었습니다.")
 
 

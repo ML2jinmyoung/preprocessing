@@ -20,4 +20,4 @@ def convert_ppt_to_pdf_in_dir(root_dir):
                     print(f"❌ 오류 발생: {ppt_path}\n{e}")
 
 
-convert_ppt_to_pdf_in_dir("./web_disk")
+convert_ppt_to_pdf_in_dir("./web_disk/[03]투자·주식거래·공시·상법")
